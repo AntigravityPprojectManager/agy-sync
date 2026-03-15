@@ -1,6 +1,6 @@
-# agy-sync — Orchestrator for ~/agy/
+# agy-sync — Orchestrator for ~/projects
 
-Ties together `project-manager`, `project-contributer`, and `project-reviewer` into a continuous automated loop.
+Ties together `project-manager`, `project-contributor`, and `project-reviewer` into a continuous automated loop for GitHub-backed repos under `~/projects`.
 
 ## What it does
 
@@ -12,12 +12,12 @@ Ties together `project-manager`, `project-contributer`, and `project-reviewer` i
 │  ┌───────────────────────────────────────────────┐  │
 │  │              orchestrate.sh                    │  │
 │  │                                                │  │
-│  │  1. SYNC    → git pull all repos in ~/agy/     │  │
+│  │  1. SYNC    → sync managed repos in ~/projects │  │
 │  │  2. CONTRIBUTE → for each PM project:          │  │
 │  │       pick todo issue → AI implement → PR      │  │
 │  │  3. REVIEW  → for each PM project:             │  │
 │  │       fetch in-progress PRs → AI review        │  │
-│  │       → approve+merge or reject                │  │
+│  │       → approve+merge or request retry         │  │
 │  └───────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
@@ -25,9 +25,10 @@ Ties together `project-manager`, `project-contributer`, and `project-reviewer` i
 ## Full lifecycle
 
 1. **Issue created** via PM web UI or Telegram
-2. **Contributor** picks it up → creates feature branch → AI implements → pushes PR → sets issue to `in_progress`
-3. **Reviewer** reviews the PR diff → AI approves+merges (→ `done`) or rejects+closes (→ `error`)
-4. **Sync** pulls the merged changes back into all local repos
+2. **Contributor** picks it up from the shared `~/projects` workspace → creates or reuses a feature branch → AI implements → pushes PR
+3. **Reviewer** reviews the PR diff → AI approves+merges (→ `done`) or posts review feedback for another contributor retry
+4. **Retry pass** contributor reuses the same issue/PR until approval or retry cap
+5. **Sync** pulls merged changes back into clean local repos
 
 ## Setup
 
@@ -38,22 +39,32 @@ cp .env.example .env
 # One-off test:
 bash orchestrate.sh --dry-run
 
-# Start the loop:
-nohup bash cron-runner.sh &
+# Preferred long-running service:
+bash service.sh start
+bash service.sh status
+bash service.sh logs
+bash service.sh stop
+
+# One foreground cycle through the service wrapper:
+bash service.sh run --once --dry-run
 ```
 
 ## Scripts
 
 | Script | Purpose |
 |---|---|
-| `sync.sh` | Git-pull all repos in `~/agy/` with merge failure handling |
-| `orchestrate.sh` | Master loop: sync → contribute (all projects) → review (all projects) |
-| `cron-runner.sh` | Periodic wrapper that runs `orchestrate.sh` every N minutes |
+| `sync.sh` | Recursively sync clean GitHub-backed repos under `~/projects/` |
+| `orchestrate.sh` | Master loop: sync → discover/link repos → contribute → review → retry pass |
+| `service-runner.sh` | Long-running loop wrapper for `orchestrate.sh` |
+| `service.sh` | Start/stop/status/logs control script for the service |
+| `cron-runner.sh` | Backward-compatible wrapper to `service-runner.sh` |
 
 ## Flags
 
 - `--dry-run` — No actual changes, just log what would happen
 - `--skip-sync` — Skip the git pull phase (orchestrate.sh only)
+- `--once` — Run exactly one service cycle and exit (`service-runner.sh`)
+- `--interval-minutes N` — Override the service poll interval (`service-runner.sh`)
 
 ## Environment Variables
 
@@ -64,7 +75,9 @@ nohup bash cron-runner.sh &
 | `GITHUB_TOKEN` | (required) | GitHub PAT |
 | `AI_PROVIDER` | `gemini` | `gemini` or `antigravity` |
 | `TARGET_MODEL` | `gemini-2.5-pro` | AI model to use |
-| `AGY_BASE_DIR` | `~/agy` | Base directory containing all repos |
-| `CONTRIBUTOR_SCRIPT` | `~/agy/project-contributer/contribute.sh` | Path to contributor script |
-| `REVIEWER_SCRIPT` | `~/agy/project-reviewer/review.sh` | Path to reviewer script |
+| `WORKSPACE_ROOT` | `~/projects` | Base directory containing managed repos |
+| `AGY_BASE_DIR` | `~/projects` | Legacy alias for `WORKSPACE_ROOT` |
+| `CONTRIBUTOR_SCRIPT` | `~/projects/project-contributor/contribute.sh` | Path to contributor script |
+| `REVIEWER_SCRIPT` | `~/projects/project-reviewer/review.sh` | Path to reviewer script |
+| `MAX_REVIEW_ATTEMPTS` | `3` | Retry cap before an issue is marked as needing human attention |
 | `INTERVAL_MINUTES` | `30` | Cron interval |

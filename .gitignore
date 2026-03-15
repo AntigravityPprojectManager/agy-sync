@@ -1,4 +1,7 @@
 .env
 logs/
+run/
 *.log
+.nohup.out
+nohup.out
 .DS_Store
