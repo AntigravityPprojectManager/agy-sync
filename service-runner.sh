@@ -75,7 +75,11 @@ while true; do
   log "--- Cycle #${cycle} starting ---"
 
   exit_code=0
-  bash "${SCRIPT_DIR}/orchestrate.sh" "${FLAGS[@]}" 2>&1 | tee -a "$SERVICE_LOG" || exit_code=$?
+  if [ "${#FLAGS[@]}" -gt 0 ]; then
+    bash "${SCRIPT_DIR}/orchestrate.sh" "${FLAGS[@]}" 2>&1 | tee -a "$SERVICE_LOG" || exit_code=$?
+  else
+    bash "${SCRIPT_DIR}/orchestrate.sh" 2>&1 | tee -a "$SERVICE_LOG" || exit_code=$?
+  fi
 
   printf '%s\n' "$exit_code" > "$LAST_EXIT_FILE"
   printf '%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$LAST_RUN_FILE"
