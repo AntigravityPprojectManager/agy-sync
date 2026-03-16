@@ -250,6 +250,7 @@ for project in json.load(sys.stdin):
         break
 ' "$pid")
 
+    phase_label_lc="$(printf '%s' "$phase_label" | tr '[:upper:]' '[:lower:]')"
     log "--- ${phase_label} Project #${pid} (${PROJECT_NAME}) ---"
 
     (
@@ -264,8 +265,8 @@ for project in json.load(sys.stdin):
       export MAX_REVIEW_ATTEMPTS="$MAX_REVIEW_ATTEMPTS"
       bash "$script_path" $dry_flag
     ) 2>&1 | tee -a "$LOG_FILE" && \
-      log "--- Project #${pid} ${phase_label,,} completed ---" || \
-      log "--- Project #${pid} ${phase_label,,} FAILED (exit=$?) ---"
+      log "--- Project #${pid} ${phase_label_lc} completed ---" || \
+      log "--- Project #${pid} ${phase_label_lc} FAILED (exit=$?) ---"
   done
 }
 
