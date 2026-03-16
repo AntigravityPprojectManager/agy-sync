@@ -312,7 +312,7 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT:-${AGY_BASE_DIR:-$HOME/projects}}"
 AI_PROVIDER="${AI_PROVIDER:-codex}"
 if [ -z "${TARGET_MODEL:-}" ]; then
   case "$AI_PROVIDER" in
-    codex) TARGET_MODEL="gpt-5.4-xhigh" ;;
+    codex) TARGET_MODEL="gpt-5-codex" ;;
     antigravity) TARGET_MODEL="agent" ;;
     *) TARGET_MODEL="gemini-2.5-pro" ;;
   esac
