@@ -282,8 +282,14 @@ PM_API="${PM_API:-https://pm.wfh.day}"
 PM_TOKEN="${PM_TOKEN:?PM_TOKEN is required}"
 GITHUB_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-$HOME/projects}"
-AI_PROVIDER="${AI_PROVIDER:-gemini}"
-TARGET_MODEL="${TARGET_MODEL:-gemini-2.5-pro}"
+AI_PROVIDER="${AI_PROVIDER:-codex}"
+if [ -z "${TARGET_MODEL:-}" ]; then
+  case "$AI_PROVIDER" in
+    codex) TARGET_MODEL="gpt-5.4-xhigh" ;;
+    antigravity) TARGET_MODEL="agent" ;;
+    *) TARGET_MODEL="gemini-2.5-pro" ;;
+  esac
+fi
 MAX_REVIEW_ATTEMPTS="${MAX_REVIEW_ATTEMPTS:-3}"
 CONTRIBUTOR_AGENT_NAME="${CONTRIBUTOR_AGENT_NAME:-auto-contributor}"
 REVIEWER_AGENT_NAME="${REVIEWER_AGENT_NAME:-auto-reviewer}"

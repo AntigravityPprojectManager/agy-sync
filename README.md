@@ -73,8 +73,8 @@ bash service.sh run --once --dry-run
 | `PM_API` | `https://pm.wfh.day` | Project Manager API URL |
 | `PM_TOKEN` | (required) | PM API token |
 | `GITHUB_TOKEN` | (required) | GitHub PAT |
-| `AI_PROVIDER` | `gemini` | `gemini` or `antigravity` |
-| `TARGET_MODEL` | `gemini-2.5-pro` | AI model to use |
+| `AI_PROVIDER` | `codex` | `codex`, `gemini`, or `antigravity` |
+| `TARGET_MODEL` | `gpt-5.4-xhigh` | AI model to use |
 | `WORKSPACE_ROOT` | `~/projects` | Base directory containing managed repos |
 | `AGY_BASE_DIR` | `~/projects` | Legacy alias for `WORKSPACE_ROOT` |
 | `CONTRIBUTOR_SCRIPT` | `~/projects/project-contributor/contribute.sh` | Path to contributor script |
