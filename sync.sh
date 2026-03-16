@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# sync.sh — Recursively sync managed GitHub repos under ~/projects
+# sync.sh — Sync managed GitHub repos from the agy-sync registry
 #
 # Uses a safe policy:
 # - only GitHub-backed repos are considered managed
@@ -12,6 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
+REGISTRY_FILE_DEFAULT="${SCRIPT_DIR}/registry.tsv"
 LOGS_DIR="${SCRIPT_DIR}/logs"
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_FILE="${LOGS_DIR}/sync_${TIMESTAMP}.log"
@@ -41,19 +42,27 @@ print("")
 PY
 }
 
-discover_repo_dirs() {
-  find "$WORKSPACE_ROOT" -type d -name .git -prune 2>/dev/null | while IFS= read -r git_dir; do
-    repo_dir="${git_dir%/.git}"
-    case "$repo_dir" in
-      "$WORKSPACE_ROOT/project-contributor/repos/"*) continue ;;
-    esac
+load_registry_dirs() {
+  [ -f "$REGISTRY_FILE" ] || {
+    echo "Registry file not found at $REGISTRY_FILE" >&2
+    return 1
+  }
 
-    origin=$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)
-    normalized=$(normalize_github_repo "$origin")
-    if [ -n "$normalized" ]; then
-      printf '%s\n' "$repo_dir"
-    fi
-  done
+  python3 - "$REGISTRY_FILE" <<'PY'
+import csv, sys
+path = sys.argv[1]
+with open(path, newline="") as fh:
+    reader = csv.reader(fh, delimiter="\t")
+    for row in reader:
+        if not row or row[0].strip().startswith("#"):
+            continue
+        while len(row) < 3:
+            row.append("")
+        enabled, repo_dir, repo_full = [cell.strip() for cell in row[:3]]
+        if enabled != "1" or not repo_dir:
+            continue
+        print(repo_dir)
+PY
 }
 
 if [ -f "$ENV_FILE" ]; then
@@ -62,11 +71,13 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
-WORKSPACE_ROOT="${WORKSPACE_ROOT:-$HOME/projects}"
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-${AGY_BASE_DIR:-$HOME/projects}}"
+REGISTRY_FILE="${REGISTRY_FILE:-$REGISTRY_FILE_DEFAULT}"
 
 log "=========================================="
 log "Git Sync started"
 log "  Workspace root : $WORKSPACE_ROOT"
+log "  Registry file  : $REGISTRY_FILE"
 log "=========================================="
 
 SYNCED=0
@@ -104,7 +115,7 @@ while IFS= read -r repo_dir; do
     FAILED=$((FAILED + 1))
     log "  [$repo_name] Sync failed without modifying local state."
   fi
-done < <(discover_repo_dirs | sort)
+done < <(load_registry_dirs | sort -u)
 
 log "=========================================="
 log "Git Sync completed!"

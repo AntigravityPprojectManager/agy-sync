@@ -1,0 +1,9 @@
+# enabled	repo_dir	github_repo	project_name	project_id
+# enabled=1 means agy-sync will manage the repo
+1	/Users/business/projects/agy-sync	AntigravityPprojectManager/agy-sync	AgySync	4
+0	/Users/business/projects/mcp-bridge/mcp-proxy	tbxark/mcp-proxy	Mcp Proxy	
+1	/Users/business/projects/project-contributor	AntigravityPprojectManager/project-contributor	Project Contributor	2
+1	/Users/business/projects/project-manager	AntigravityPprojectManager/project-manager	Project Manager	1
+1	/Users/business/projects/project-reviewer	AntigravityPprojectManager/project-reviewer	Project Reviewer	3
+1	/Users/business/projects/telegram_codex	AntigravityPprojectManager/telegram_codex	Telegram Codex	5
+1	/Users/business/projects/travel_portals_compare	AntigravityPprojectManager/travel_portals_compare	Travel Portals Compare	6

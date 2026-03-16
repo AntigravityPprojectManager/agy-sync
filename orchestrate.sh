@@ -14,17 +14,20 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
+REGISTRY_FILE_DEFAULT="${SCRIPT_DIR}/registry.tsv"
 LOGS_DIR="${SCRIPT_DIR}/logs"
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 LOG_FILE="${LOGS_DIR}/orchestrate_${TIMESTAMP}.log"
 
 DRY_RUN=false
 SKIP_SYNC=false
+REGISTRY_ONLY=false
 
 for arg in "$@"; do
   case $arg in
     --dry-run) DRY_RUN=true ;;
     --skip-sync) SKIP_SYNC=true ;;
+    --registry-only) REGISTRY_ONLY=true ;;
   esac
 done
 
@@ -109,40 +112,41 @@ print("")
 PY
 }
 
-discover_local_repos() {
-  find "$WORKSPACE_ROOT" -type d -name .git -prune 2>/dev/null | while IFS= read -r git_dir; do
-    repo_dir="${git_dir%/.git}"
-    case "$repo_dir" in
-      "$WORKSPACE_ROOT/project-contributor/repos/"*) continue ;;
-    esac
+project_id_exists() {
+  local projects_json="$1"
+  local project_id="$2"
 
-    origin=$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)
-    repo_full=$(normalize_github_repo "$origin")
-    if [ -n "$repo_full" ]; then
-      printf '%s\t%s\n' "$repo_dir" "$repo_full"
-    fi
-  done | sort
+  [ -n "$project_id" ] || return 1
+
+  printf '%s' "$projects_json" | python3 -c '
+import json, sys
+project_id = int(sys.argv[1])
+for project in json.load(sys.stdin):
+    if project["id"] == project_id:
+        print(project_id)
+        break
+' "$project_id"
 }
 
 project_id_for_repo() {
   local projects_json="$1"
   local repo_full="$2"
 
-  printf '%s' "$projects_json" | python3 - "$repo_full" <<'PY'
+  printf '%s' "$projects_json" | python3 -c '
 import json, sys
 repo = sys.argv[1].lower()
 for project in json.load(sys.stdin):
     if (project.get("github_repo") or "").lower() == repo:
         print(project["id"])
         break
-PY
+' "$repo_full"
 }
 
 project_id_for_name() {
   local projects_json="$1"
   local repo_name="$2"
 
-  printf '%s' "$projects_json" | python3 - "$repo_name" <<'PY'
+  printf '%s' "$projects_json" | python3 -c '
 import json, sys
 name = sys.argv[1].lower()
 matches = [
@@ -151,7 +155,7 @@ matches = [
 ]
 if len(matches) == 1:
     print(matches[0]["id"])
-PY
+' "$repo_name"
 }
 
 ensure_project_link() {
@@ -181,11 +185,11 @@ PY
 }
 
 create_project_for_repo() {
-  local repo_name="$1"
+  local project_name="$1"
   local repo_dir="$2"
 
   local payload
-  payload=$(python3 - "$repo_name" "$repo_dir" <<'PY'
+  payload=$(python3 - "$project_name" "$repo_dir" <<'PY'
 import json, sys
 print(json.dumps({
     "name": sys.argv[1],
@@ -195,7 +199,7 @@ PY
 )
 
   if [ "$DRY_RUN" = true ]; then
-    log "[DRY RUN] Would create PM project for ${repo_name}"
+    log "[DRY RUN] Would create PM project for ${project_name}"
     return 0
   fi
 
@@ -203,6 +207,26 @@ PY
     -H "Authorization: Bearer ${PM_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "$payload"
+}
+
+load_registry_entries() {
+  [ -f "$REGISTRY_FILE" ] || die "Registry file not found at $REGISTRY_FILE"
+
+  python3 - "$REGISTRY_FILE" <<'PY'
+import csv, sys
+path = sys.argv[1]
+with open(path, newline="") as fh:
+    reader = csv.reader(fh, delimiter="\t")
+    for row in reader:
+        if not row or row[0].strip().startswith("#"):
+            continue
+        while len(row) < 5:
+            row.append("")
+        enabled, repo_dir, repo_full, project_name, project_id = [cell.strip() for cell in row[:5]]
+        if not repo_dir or not repo_full:
+            continue
+        print("\t".join([enabled or "1", repo_dir, repo_full, project_name, project_id]))
+PY
 }
 
 run_agent_phase() {
@@ -217,15 +241,14 @@ run_agent_phase() {
   fi
 
   for pid in $PROJECT_IDS; do
-    PROJECT_NAME=$(printf '%s' "$PROJECTS_JSON" | python3 - "$pid" <<'PY'
+    PROJECT_NAME=$(printf '%s' "$PROJECTS_JSON" | python3 -c '
 import json, sys
 pid = int(sys.argv[1])
 for project in json.load(sys.stdin):
     if project["id"] == pid:
         print(project["name"])
         break
-PY
-)
+' "$pid")
 
     log "--- ${phase_label} Project #${pid} (${PROJECT_NAME}) ---"
 
@@ -254,6 +277,7 @@ _EXT_PM_API="${PM_API:-}"
 _EXT_PM_TOKEN="${PM_TOKEN:-}"
 _EXT_GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 _EXT_WORKSPACE_ROOT="${WORKSPACE_ROOT:-}"
+_EXT_AGY_BASE_DIR="${AGY_BASE_DIR:-}"
 _EXT_AI_PROVIDER="${AI_PROVIDER:-}"
 _EXT_TARGET_MODEL="${TARGET_MODEL:-}"
 _EXT_MAX_REVIEW_ATTEMPTS="${MAX_REVIEW_ATTEMPTS:-}"
@@ -261,6 +285,7 @@ _EXT_CONTRIBUTOR_AGENT_NAME="${CONTRIBUTOR_AGENT_NAME:-}"
 _EXT_REVIEWER_AGENT_NAME="${REVIEWER_AGENT_NAME:-}"
 _EXT_CONTRIBUTOR_SCRIPT="${CONTRIBUTOR_SCRIPT:-}"
 _EXT_REVIEWER_SCRIPT="${REVIEWER_SCRIPT:-}"
+_EXT_REGISTRY_FILE="${REGISTRY_FILE:-}"
 
 set -a
 source "$ENV_FILE"
@@ -270,6 +295,7 @@ set +a
 [ -n "$_EXT_PM_TOKEN" ] && PM_TOKEN="$_EXT_PM_TOKEN"
 [ -n "$_EXT_GITHUB_TOKEN" ] && GITHUB_TOKEN="$_EXT_GITHUB_TOKEN"
 [ -n "$_EXT_WORKSPACE_ROOT" ] && WORKSPACE_ROOT="$_EXT_WORKSPACE_ROOT"
+[ -n "$_EXT_AGY_BASE_DIR" ] && AGY_BASE_DIR="$_EXT_AGY_BASE_DIR"
 [ -n "$_EXT_AI_PROVIDER" ] && AI_PROVIDER="$_EXT_AI_PROVIDER"
 [ -n "$_EXT_TARGET_MODEL" ] && TARGET_MODEL="$_EXT_TARGET_MODEL"
 [ -n "$_EXT_MAX_REVIEW_ATTEMPTS" ] && MAX_REVIEW_ATTEMPTS="$_EXT_MAX_REVIEW_ATTEMPTS"
@@ -277,11 +303,12 @@ set +a
 [ -n "$_EXT_REVIEWER_AGENT_NAME" ] && REVIEWER_AGENT_NAME="$_EXT_REVIEWER_AGENT_NAME"
 CONTRIBUTOR_SCRIPT="$_EXT_CONTRIBUTOR_SCRIPT"
 REVIEWER_SCRIPT="$_EXT_REVIEWER_SCRIPT"
+REGISTRY_FILE="$_EXT_REGISTRY_FILE"
 
 PM_API="${PM_API:-https://pm.wfh.day}"
 PM_TOKEN="${PM_TOKEN:?PM_TOKEN is required}"
 GITHUB_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
-WORKSPACE_ROOT="${WORKSPACE_ROOT:-$HOME/projects}"
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-${AGY_BASE_DIR:-$HOME/projects}}"
 AI_PROVIDER="${AI_PROVIDER:-codex}"
 if [ -z "${TARGET_MODEL:-}" ]; then
   case "$AI_PROVIDER" in
@@ -295,6 +322,7 @@ CONTRIBUTOR_AGENT_NAME="${CONTRIBUTOR_AGENT_NAME:-auto-contributor}"
 REVIEWER_AGENT_NAME="${REVIEWER_AGENT_NAME:-auto-reviewer}"
 CONTRIBUTOR_SCRIPT="${CONTRIBUTOR_SCRIPT:-}"
 REVIEWER_SCRIPT="${REVIEWER_SCRIPT:-}"
+REGISTRY_FILE="${REGISTRY_FILE:-$REGISTRY_FILE_DEFAULT}"
 
 if [ -z "$CONTRIBUTOR_SCRIPT" ]; then
   CONTRIBUTOR_SCRIPT="${WORKSPACE_ROOT}/project-contributor/contribute.sh"
@@ -321,8 +349,10 @@ log "  Model          : $TARGET_MODEL"
 log "  Workspace root : $WORKSPACE_ROOT"
 log "  Contributor    : $CONTRIBUTOR_SCRIPT"
 log "  Reviewer       : $REVIEWER_SCRIPT"
+log "  Registry       : $REGISTRY_FILE"
 log "  Dry run        : $DRY_RUN"
 log "  Skip sync      : $SKIP_SYNC"
+log "  Registry only  : $REGISTRY_ONLY"
 log "=========================================="
 
 if [ "$SKIP_SYNC" = false ]; then
@@ -337,63 +367,74 @@ else
 fi
 
 log ""
-log "========== PHASE 2: DISCOVER LOCAL REPOS =========="
+log "========== PHASE 2: SYNC REGISTRY =========="
 
 PROJECTS_JSON=$(fetch_projects_json) || die "Failed to fetch projects from PM API"
 
-DISCOVERED=0
+REGISTERED=0
 CREATED=0
 LINKED=0
+RESOLVED_PROJECT_IDS=""
 
-while IFS=$'\t' read -r repo_dir repo_full; do
+while IFS=$'\t' read -r enabled repo_dir repo_full project_name preferred_project_id; do
+  [ "$enabled" = "1" ] || continue
   [ -n "$repo_full" ] || continue
 
-  repo_name=$(basename "$repo_full")
-  project_id=$(project_id_for_repo "$PROJECTS_JSON" "$repo_full")
-
-  if [ -n "$project_id" ]; then
-    log "Using existing PM project #${project_id} for ${repo_full}"
-    ensure_project_link "$project_id" "$repo_full"
-  else
-    project_id=$(project_id_for_name "$PROJECTS_JSON" "$repo_name")
-
-    if [ -n "$project_id" ]; then
-      log "Linking existing PM project #${project_id} (${repo_name}) to ${repo_full}"
-      ensure_project_link "$project_id" "$repo_full"
-      LINKED=$((LINKED + 1))
-    else
-      log "Creating PM project for ${repo_full} (${repo_dir})"
-      CREATE_RESPONSE=$(create_project_for_repo "$repo_name" "$repo_dir")
-      if [ "$DRY_RUN" = false ]; then
-        project_id=$(printf '%s' "$CREATE_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])" 2>/dev/null || true)
-      fi
-      CREATED=$((CREATED + 1))
-      if [ -n "$project_id" ]; then
-        ensure_project_link "$project_id" "$repo_full"
-        LINKED=$((LINKED + 1))
-      fi
-    fi
+  if [ ! -d "$repo_dir/.git" ]; then
+    log "WARNING: Registry repo path missing or not a git repo: $repo_dir"
+    continue
   fi
 
-  DISCOVERED=$((DISCOVERED + 1))
+  resolved_project_id="$(project_id_exists "$PROJECTS_JSON" "$preferred_project_id" || true)"
+  if [ -z "$resolved_project_id" ]; then
+    resolved_project_id="$(project_id_for_repo "$PROJECTS_JSON" "$repo_full")"
+  fi
+  if [ -z "$resolved_project_id" ] && [ -n "$project_name" ]; then
+    resolved_project_id="$(project_id_for_name "$PROJECTS_JSON" "$project_name")"
+  fi
+
+  if [ -n "$resolved_project_id" ]; then
+    log "Using PM project #${resolved_project_id} for ${repo_full}"
+  else
+    if [ -z "$project_name" ]; then
+      project_name="$(basename "$repo_full")"
+    fi
+    log "Creating PM project for ${repo_full} (${repo_dir})"
+    CREATE_RESPONSE=$(create_project_for_repo "$project_name" "$repo_dir")
+    if [ "$DRY_RUN" = false ]; then
+      resolved_project_id=$(printf '%s' "$CREATE_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])" 2>/dev/null || true)
+    fi
+    CREATED=$((CREATED + 1))
+  fi
+
+  if [ -n "$resolved_project_id" ]; then
+    ensure_project_link "$resolved_project_id" "$repo_full"
+    LINKED=$((LINKED + 1))
+    RESOLVED_PROJECT_IDS="${RESOLVED_PROJECT_IDS}${resolved_project_id}"$'\n'
+  fi
+
+  REGISTERED=$((REGISTERED + 1))
 
   if [ "$DRY_RUN" = false ]; then
     PROJECTS_JSON=$(fetch_projects_json) || die "Failed to refresh projects from PM API"
   fi
-done < <(discover_local_repos)
+done < <(load_registry_entries)
 
-log "Local GitHub repos discovered : $DISCOVERED"
+log "Registry repos processed       : $REGISTERED"
 log "PM projects created           : $CREATED"
 log "PM links updated              : $LINKED"
 
 PROJECTS_JSON=$(fetch_projects_json) || die "Failed to refresh projects from PM API"
 
-PROJECT_IDS=$(printf '%s' "$PROJECTS_JSON" | python3 -c '
-import json, sys
-for project in json.load(sys.stdin):
-    repo = project.get("github_repo") or ""
-    if repo and repo != "None":
-        print(project["id"])
+PROJECT_IDS=$(printf '%s' "$RESOLVED_PROJECT_IDS" | python3 -c '
+import sys
+seen = []
+for line in sys.stdin:
+    value = line.strip()
+    if value and value not in seen:
+        seen.append(value)
+for value in seen:
+    print(value)
 ')
 
 if [ -z "$PROJECT_IDS" ]; then
@@ -409,8 +450,17 @@ import json, sys
 for project in json.load(sys.stdin):
     repo = project.get("github_repo") or ""
     if repo and repo != "None":
-        print(f"  Project #{project['id']}: {project['name']} -> {repo}")
+        print("  Project #{}: {} -> {}".format(project["id"], project["name"], repo))
 ' | tee -a "$LOG_FILE"
+
+if [ "$REGISTRY_ONLY" = true ]; then
+  log ""
+  log "Registry sync only requested. Skipping contributor/reviewer phases."
+  log "=========================================="
+  log "Orchestrator run completed!"
+  log "=========================================="
+  exit 0
+fi
 
 log ""
 log "========== PHASE 3: CONTRIBUTING =========="
